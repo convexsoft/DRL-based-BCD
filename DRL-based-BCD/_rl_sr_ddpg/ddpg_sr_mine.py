@@ -1,8 +1,4 @@
-#ddpg 来实现论文
-
-import math
 import random
-import gym
 import numpy as np
 import torch
 import torch.nn as nn
@@ -28,8 +24,7 @@ class ValueNetwork(nn.Module):
 
     def forward(self, state, action):
         x = torch.cat([state, action], 1)
-        # print("x:", x[0][:-3])
-        # print("x_size:", len(x[0]))
+
         x = F.relu(self.linear1(x))
         x = F.relu(self.linear2(x))
         x = self.linear3(x)
@@ -42,16 +37,9 @@ class PolicyNetwork(nn.Module):
         self.linear1 = nn.Linear(num_inputs, hidden_size)
         self.linear2 = nn.Linear(hidden_size, hidden_size)
         self.linear3 = nn.Linear(hidden_size, num_actions)
-
-        # uniform_将tensor用从均匀分布中抽样得到的值填充。参数初始化
         self.linear3.weight.data.uniform_(-init_w, init_w)
-        #也用用normal_(0, 0.1) 来初始化的，高斯分布中抽样填充，这两种都是比较有效的初始化方式
         self.linear3.bias.data.uniform_(-init_w, init_w)
-        #其意义在于我们尽可能保持 每个神经元的输入和输出的方差一致。
-        #使用 RELU（without BN） 激活函数时，最好选用 He 初始化方法，将参数初始化为服从高斯分布或者均匀分布的较小随机数
-        #使用 BN 时，减少了网络对参数初始值尺度的依赖，此时使用较小的标准差(eg：0.01)进行初始化即可
 
-        #但是注意DRL中不建议使用BN
 
     def forward(self, x):
         x = F.relu(self.linear1(x))
@@ -173,19 +161,19 @@ class DDPG(object):
 
 
 def sr_step(o, a, label):
-    G = o[0:9].reshape(3, 3)
-    w = o[9:12].reshape(3, 1)
-    sigma = o[12:15].reshape(3, 1)
-    p_bar = o[15]
+    L = len(label)
+    G = o[0:L**2].reshape(L, L)
+    w = o[L**2:L**2+L].reshape(L, 1)
+    sigma = o[L**2+L:L**2+2*L].reshape(L, 1)
+    p_bar = o[L**2+2*L]
     gamma_star = label
     F = np.dot(np.linalg.inv(np.diag(np.diag(G))), (G - np.diag(np.diag(G))))
     v = np.dot(np.linalg.inv(np.diag(np.diag(G))), sigma)
-    # print(np.dot(v,np.ones((1, 3))))
-    B = F+1/p_bar*np.dot(v,np.ones((1, 3)))
+    B = F+1/p_bar*np.dot(v,np.ones((1, L)))
     # y = 1/(1/np.exp(a)+1)
     # b = w[:,0]*y
     b = w[:, 0] * a
-    til_gamma = iteration_3u_v2(B, b)
+    til_gamma = iteration_for_subproblem(B, b)
     gamma = np.exp(til_gamma)
 
     obj_updated = w.T.dot(np.log(1 + gamma))[0]
@@ -196,7 +184,7 @@ def sr_step(o, a, label):
     # print("gamma:", gamma)
     # print("gamma_star:", gamma_star)
     # print("reward:", reward)
-    o2 = np.append(o[:-3], gamma)
+    o2 = np.append(o[:-L], gamma)
     d = False
     if reward >= -1e-3:
         d = True
@@ -204,63 +192,34 @@ def sr_step(o, a, label):
 
 
 
-def iteration_3u_v2(B, b):
-    z = np.random.rand(3)
-    z0 = z[0]
-    z1 = z[1]
-    z2 = z[2]
+def iteration_for_subproblem(B, b):
+    z = np.random.rand(len(b))
     tol = 10e-9
     err = 1
-    # print("B:", np.reshape(B, (1,9)))
-
     while err>tol:
-        z0_temp = z0
-        z1_temp = z1
-        z2_temp = z2
-        # print("Z:", z0,z1,z2)
+        z_temp = z
+        z = b/(B.T.dot(b/(B.dot(z))))
+        err = np.linalg.norm(z_temp-z,1)
 
-        z0 = b[0]/(b[0]*B[0][0]/(B[0][0]*z0+B[0][1]*z1+B[0][2]*z2) +  b[1]*B[1][0]/(B[1][0]*z0+B[1][1]*z1+B[1][2]*z2) +  b[2]*B[2][0]/(B[2][0]*z0+B[2][1]*z1+B[2][2]*z2))
-        z1 = b[1]/(b[0]*B[0][1]/(B[0][0]*z0+B[0][1]*z1+B[0][2]*z2) +  b[1]*B[1][1]/(B[1][0]*z0+B[1][1]*z1+B[1][2]*z2) +  b[2]*B[2][1]/(B[2][0]*z0+B[2][1]*z1+B[2][2]*z2))
-        z2 = b[2]/(b[0]*B[0][2]/(B[0][0]*z0+B[0][1]*z1+B[0][2]*z2) +  b[1]*B[1][2]/(B[1][0]*z0+B[1][1]*z1+B[1][2]*z2) +  b[2]*B[2][2]/(B[2][0]*z0+B[2][1]*z1+B[2][2]*z2))
-
-        err = abs(z0_temp - z0)+abs(z1_temp - z1)+abs(z2_temp - z2)
-    z = np.array([z0, z1, z2])
-    # print("b:", b)
-    # print("Z:", z0, z1, z2)
     res = B.dot(z)
-    # print(np.log(z[0] / res[0]))
-    # print(np.log(z[1] / res[1]))
-    # print(np.log(z[2] / res[2]))
-    til_gamma = np.array([np.log(z[0] / res[0]),np.log(z[1] / res[1]),np.log(z[2] / res[2])])
-
+    til_gamma = np.log(z/res)
     return til_gamma
 
 
-
-def main():
+def main(state_dim = 19,action_dim = 3,hidden_dim = 256):
     sr_data = list()
     sr_target = list()
     with open("data1.csv", "r") as csvfile:
         reader = csv.reader(csvfile)
         for line in reader:
-            sr_data.append(list(map(float, line[:-3])))
-            sr_target.append(list(map(float, line[-3:])))
-
-    action_space = 2
-
-
-    # ou_noise = OUNoise(action_space)
-
-    state_dim = 19
-    action_dim = 3
-    hidden_dim = 256
-
+            sr_data.append(list(map(float, line[:-action_dim])))
+            sr_target.append(list(map(float, line[-action_dim:])))
 
     ddpg = DDPG(action_dim, state_dim, hidden_dim)
 
     max_frames = 150
     #2500,3500,4500,5500
-    max_steps = 4500
+    max_steps = 5000
     frame_idx = 0
     # rewards = []
     replay_size = 0
@@ -276,7 +235,7 @@ def main():
 
 
         # state = env.reset()
-        o_init = np.append(np.array(sr_data[frame_idx]), np.random.rand(3) * 0.1)
+        o_init = np.append(np.array(sr_data[frame_idx]), np.random.rand(action_dim) * 0.1)
         label = np.array(sr_target[frame_idx])
 
         state = o_init
@@ -307,7 +266,7 @@ def main():
             if done:
                 break
 
-        gamma = state[-3:]
+        gamma = state[-action_dim:]
         err = np.linalg.norm(gamma - label)
         print('Episode:', frame_idx, 'gamma:', gamma, 'label:', label, '==========', 'Reward:', episode_reward, 'err:', err,
               'j:', step)
@@ -322,12 +281,30 @@ def main():
         if frame_idx > 50 and step >= 1000:
             outlier_list.append(frame_idx)
 
-    plt.figure(figsize=(7, 5))
+    print("rewardList:", rewardList)
+    print("err_list:", err_list)
+    print("stop_step_list:", stop_step_list)
 
+    # print("outlier_list:", outlier_list)
+
+    print("outlier_list:", outlier_list)
+
+    plt.figure(figsize=(18, 5))
+
+    plt.subplot(1, 3, 1)
     plt.plot(np.arange(len(rewardList)), rewardList)
     plt.xlabel("Episode", fontsize=10)
     plt.ylabel("ddpg_Reward", fontsize=10)
 
+    plt.subplot(1, 3, 2)
+    plt.plot(np.arange(len(err_list)), err_list)
+    plt.xlabel("Episode", fontsize=10)
+    plt.ylabel("SINR error", fontsize=10)
+
+    plt.subplot(1, 3, 3)
+    plt.plot(np.arange(len(stop_step_list)), stop_step_list)
+    plt.xlabel("Episode", fontsize=10)
+    plt.ylabel("Iteration steps", fontsize=10)
 
     plt.savefig("res_v1.pdf")
     plt.show()
