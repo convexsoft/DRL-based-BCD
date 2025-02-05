@@ -1,6 +1,3 @@
-# 对于多个样例来训练
-# 用来出result
-
 from td3_sr import TD3
 import matplotlib.pyplot as plt
 import numpy as np
@@ -8,206 +5,188 @@ import csv
 import math
 import pandas as pd
 
+def env_o_init(sr_data_single,L):
+    G = sr_data_single[0:L ** 2].reshape(L, L)
+    w = sr_data_single[L ** 2:L ** 2 + L].reshape(L, 1)
+    sigma = sr_data_single[L ** 2 + L:L ** 2 + 2 * L].reshape(L, 1)
+    p_bar = sr_data_single[L ** 2 + 2 * L]
+    F = np.dot(np.linalg.inv(np.diag(np.diag(G))), (G - np.diag(np.diag(G))))
+    v = np.dot(np.linalg.inv(np.diag(np.diag(G))), sigma)
+    notil_gamma = np.random.rand(L) * 1
+
+    p = np.linalg.inv(np.eye(len(notil_gamma)) - np.diag(notil_gamma) @ F) @ np.diag(notil_gamma) @ v
+    Fpv = F.dot(p) + v
+    res = np.log(1 + notil_gamma)
+    rate = np.diag(w[:, 0]) @ np.log(1 + notil_gamma)
+
+    o_init = np.hstack((sr_data_single, p.reshape(L), Fpv.reshape(L), rate.reshape(L), notil_gamma))
+    return o_init
+
 def step(o, a, label):
-    G = o[0:9].reshape(3, 3)
-    w = o[9:12].reshape(3, 1)
-    sigma = o[12:15].reshape(3, 1)
-    p_bar = o[15]
+    L = len(label)
+    G = o[0:L ** 2].reshape(L, L)
+    w = o[L ** 2:L ** 2 + L].reshape(L, 1)
+    sigma = o[L ** 2 + L:L ** 2 + 2 * L].reshape(L, 1)
+    p_bar = o[L ** 2 + 2 * L]
     gamma_star = label
     F = np.dot(np.linalg.inv(np.diag(np.diag(G))), (G - np.diag(np.diag(G))))
     v = np.dot(np.linalg.inv(np.diag(np.diag(G))), sigma)
-    # print(np.dot(v,np.ones((1, 3))))
-    B = F+1/p_bar*np.dot(v,np.ones((1, 3)))
-    # y = 1/(1/np.exp(a)+1)
-    # b = w[:,0]*y
+    B = F + 1 / p_bar * np.dot(v, np.ones((1, L)))
     b = w[:, 0] * a
-    til_gamma = iteration_3u_v2(B, b)
-    gamma = np.exp(til_gamma)
+    til_gamma = iteration_for_subproblem(B, b)
+    notil_gamma = np.exp(til_gamma)
 
-    obj_updated = w.T.dot(np.log(1 + gamma))[0]
+    p = np.linalg.inv(np.eye(len(notil_gamma)) - np.diag(notil_gamma) @ F) @ np.diag(notil_gamma) @ v
+    Fpv = F.dot(p) + v
+    res = np.log(1 + notil_gamma)
+    rate = np.diag(w[:, 0])@np.log(1 + notil_gamma)
+
+
+    obj_updated = w.T.dot(np.log(1 + notil_gamma))[0]
     obj_star = w.T.dot(np.log(1 + gamma_star))[0]
     reward = - (np.abs(obj_updated-obj_star))**2
-    # reward = - np.linalg.norm(gamma - gamma_star, 1)
-    # print("a:", a)
-    # print("gamma:", gamma)
-    # print("gamma_star:", gamma_star)
-    # print("reward:", reward)
-    o2 = np.append(o[:-3], gamma)
+    obj_err = abs(np.abs(obj_updated - obj_star)) / obj_star
+    o2 = np.hstack((o[:L ** 2 + 2 * L+1],p.reshape(L), Fpv.reshape(L), rate.reshape(L), notil_gamma))
+
     d = False
     if reward >= -1e-3:
         d = True
-    return o2, reward, d
+    return o2, reward, d, obj_err
 
-
-def iteration_3u_v2(B, b):
-    z = np.random.rand(3)
-    z0 = z[0]
-    z1 = z[1]
-    z2 = z[2]
+def iteration_for_subproblem(B, b):
+    z = np.random.rand(len(b))
     tol = 10e-9
     err = 1
-    # print("B:", np.reshape(B, (1,9)))
-
     while err>tol:
-        z0_temp = z0
-        z1_temp = z1
-        z2_temp = z2
-        # print("Z:", z0,z1,z2)
+        z_temp = z
+        z = b/(B.T.dot(b/(B.dot(z))))
+        err = np.linalg.norm(z_temp-z,1)
 
-        z0 = b[0]/(b[0]*B[0][0]/(B[0][0]*z0+B[0][1]*z1+B[0][2]*z2) +  b[1]*B[1][0]/(B[1][0]*z0+B[1][1]*z1+B[1][2]*z2) +  b[2]*B[2][0]/(B[2][0]*z0+B[2][1]*z1+B[2][2]*z2))
-        z1 = b[1]/(b[0]*B[0][1]/(B[0][0]*z0+B[0][1]*z1+B[0][2]*z2) +  b[1]*B[1][1]/(B[1][0]*z0+B[1][1]*z1+B[1][2]*z2) +  b[2]*B[2][1]/(B[2][0]*z0+B[2][1]*z1+B[2][2]*z2))
-        z2 = b[2]/(b[0]*B[0][2]/(B[0][0]*z0+B[0][1]*z1+B[0][2]*z2) +  b[1]*B[1][2]/(B[1][0]*z0+B[1][1]*z1+B[1][2]*z2) +  b[2]*B[2][2]/(B[2][0]*z0+B[2][1]*z1+B[2][2]*z2))
-
-        err = abs(z0_temp - z0)+abs(z1_temp - z1)+abs(z2_temp - z2)
-    z = np.array([z0, z1, z2])
-    # print("b:", b)
-    # print("Z:", z0, z1, z2)
     res = B.dot(z)
-    # print(np.log(z[0] / res[0]))
-    # print(np.log(z[1] / res[1]))
-    # print(np.log(z[2] / res[2]))
-    til_gamma = np.array([np.log(z[0] / res[0]),np.log(z[1] / res[1]),np.log(z[2] / res[2])])
-
+    til_gamma = np.log(z/res)
     return til_gamma
 
 
-if __name__ == '__main__':
+def main(obs_dim,nn_dim,act_dim,epoch_num,MAX_EPISODE=100,MAX_STEP=5000,update_every=50,batch_size=10,start_update=40,
+         replay_size=int(1e5), gamma=0.9, pi_lr=1e-6,q_lr=1e-6, policy_delay=5):
     sr_data = list()
     sr_target = list()
     with open("res/data1.csv", "r") as csvfile:
         reader = csv.reader(csvfile)
         for line in reader:
-            sr_data.append(list(map(float, line[:-3])))
-            sr_target.append(list(map(float, line[-3:])))
+            sr_data.append(list(map(float, line[:-act_dim])))
+            sr_target.append(list(map(float, line[-act_dim:])))
 
-    obs_dim = 19
-    act_dim = 3
-    td3 = TD3(obs_dim, act_dim)
-
-    # MAX_EPISODE = len(sr_data)
-    MAX_EPISODE = 1000 # 这里指的是第几个样本
-    MAX_STEP = 5000
-    update_every = 250 # 100
-    batch_size = 20
-    start_update = 100 # 10
-
-
-    all_rewardList = []
-    all_err_list = []
-    all_stop_step_list = []
-    epoch_num = 1
+    td3 = TD3(obs_dim, act_dim,nn_dim,replay_size=replay_size, gamma=gamma, pi_lr=pi_lr, q_lr=q_lr,
+                  act_noise=0.05, target_noise=0.05, noise_clip=0.5, policy_delay=policy_delay)
 
     for epoch in range(epoch_num):
         print("epoch:", epoch)
+        filename = f"res/rewardv3_v2_ME{MAX_EPISODE}_SU{start_update}_Ga{gamma}_UE{update_every}_BS{batch_size}_lr{pi_lr}_MS{MAX_STEP}_Epoch{epoch}" + '.pdf'
 
         rewardList = []
         err_list = []
         stop_step_list = []
         outlier_list = []
+        obj_err_list = []
 
         for episode in range(MAX_EPISODE):
+            j_converge_list = [MAX_STEP]
             # o = env.reset()
-            o_init = np.append(np.array(sr_data[episode]), np.random.rand(3)*0.1)
+            o_init = env_o_init(np.array(sr_data[episode]),act_dim)
+            # sr_data_a = sr_data[epoch]
+            # print("o_init:",o_init)
             label = np.array(sr_target[episode])
-
             o = o_init
             ep_reward = 0
-            stop_step = 0
+            # stop_step = 0
+
             for j in range(MAX_STEP):
                 # if episode > 20:
                 #     a = td3.get_action(o, td3.act_noise) * 2
                 # else:
                 #     a = env.action_space.sample()
                 # a = td3.get_action(o, td3.act_noise) * 2
-                a = td3.get_action(o, 0.001)
-                # print("==a:", a)
-                # if sum(a) <=0:
-                #     print("==a:", a)
-                #     continue
-                # o2, r, d, _ = env.step(a)
 
+                a = td3.get_action(o[16:], 0.001)
                 # ======================
                 # next state
-                o2, r, d = step(o, a, label)
-
+                # o2, r, d, obj_err = step(o, a, label)
+                # o2, reward, d, obj_err, reward_acc= step(o, a, label)
+                o2, r, d, obj_err, reward_acc = step(o, a, label)
                 # ======================
-
                 td3.replay_buffer.store(o, a, r, o2, d)
-
                 if episode >= start_update and j % update_every == 0:
                     td3.update(batch_size, update_every)
-                    # print("j:", j)
 
                 o = o2
-                ep_reward += r
-                stop_step = j
-                if d: break
-            gamma = o[-3:]
-            err = np.linalg.norm(gamma-label)
-            print('Episode:', episode,'gamma:', gamma,'label:', label,'==========', 'Reward:',ep_reward, 'err:', err, 'j:', stop_step)
-            # print('Episode:', episode, '====Reward:',ep_reward, '****err:', err, 'j:', stop_step)
+                ep_reward += reward_acc
+                # stop_step = j
+                if d:
+                    j_converge_list.append(j)
+            notil_gamma = o[-act_dim:]
+            err = np.linalg.norm(notil_gamma - label)
+            converge_step = min(j_converge_list)
 
-            # print('gamma:', o)
-            # print("a:", a)
-            if math.isnan (ep_reward):
+            print('Episode:', episode, 'notil_gamma:', notil_gamma, 'label:', label, '==========', 'Reward:', ep_reward, 'err:',
+                  err, '---', 'obj_err:', obj_err, 'j:', converge_step)
+            if math.isnan(ep_reward):
                 print("a:", a)
             rewardList.append(ep_reward)
             err_list.append(err)
-            stop_step_list.append(stop_step)
-            if episode > 50 and stop_step>=1000:
+            obj_err_list.append(obj_err)
+            stop_step_list.append(converge_step)
+            if episode > 50 and converge_step >= 1000:
                 outlier_list.append(episode)
 
         print("rewardList:", rewardList)
         print("err_list:", err_list)
         print("stop_step_list:", stop_step_list)
-
-        # print("outlier_list:", outlier_list)
-
         print("outlier_list:", outlier_list)
 
-        plt.figure(figsize=(18, 5))
+        plt.figure(figsize=(18, 4))
 
-        plt.subplot(1, 3, 1)
+        plt.subplot(1, 4, 1)
         plt.plot(np.arange(len(rewardList)), rewardList)
         plt.xlabel("Episode", fontsize=10)
         plt.ylabel("Reward", fontsize=10)
 
-        plt.subplot(1, 3, 2)
+        plt.subplot(1, 4, 2)
         plt.plot(np.arange(len(err_list)), err_list)
         plt.xlabel("Episode", fontsize=10)
         plt.ylabel("SINR error", fontsize=10)
 
-        plt.subplot(1, 3, 3)
+        plt.subplot(1, 4, 3)
+        plt.plot(np.arange(len(obj_err_list)), obj_err_list)
+        plt.xlabel("Episode", fontsize=10)
+        plt.ylabel("Sum rate error", fontsize=10)
+
+        plt.subplot(1, 4, 4)
         plt.plot(np.arange(len(stop_step_list)), stop_step_list)
         plt.xlabel("Episode", fontsize=10)
         plt.ylabel("Iteration steps", fontsize=10)
 
-        plt.savefig("res_v1.pdf")
-        plt.show()
+        title_name = f"main_sr_rewardv3_v2_epoch_{epoch}"
+        plt.title(title_name)
+        plt.savefig(filename)
 
-        all_rewardList.append(rewardList)
-        all_err_list.append(err_list)
-        all_stop_step_list.append(stop_step_list)
-
-    # data_pd = pd.DataFrame(all_rewardList)
-    # data_pd.to_csv('res_reward_v1.csv')
-    arr_rewardList = np.array(all_rewardList)
-    arr_err_list = np.array(all_err_list)
-    arr_stop_step_list = np.array(all_stop_step_list)
-
-
-    with open('res/res_reward_v3_startupdat10.csv', 'w', newline='') as file:
-        for i in range(MAX_EPISODE):
+        with open('res/reward_rewardv3_v2.csv', 'a', newline='') as file:
             mywriter = csv.writer(file, delimiter=',')
-            a = np.array(arr_rewardList[:,i])
-            mywriter.writerow(a)
-    with open('res/res_err_v3_startupdat10.csv', 'w', newline='') as file:
-        for i in range(MAX_EPISODE):
+            mywriter.writerow(filename)
+            mywriter.writerow(rewardList)
+
+        with open('res/err_rewardv3_v2.csv', 'a', newline='') as file:
             mywriter = csv.writer(file, delimiter=',')
-            a = np.array(arr_err_list[:, i])
-            mywriter.writerow(a)
-    with open('res/res_step_v3_startupdat10.csv', 'w', newline='') as file:
-        for i in range(MAX_EPISODE):
+            mywriter.writerow(filename)
+            mywriter.writerow(err_list)
+
+        with open('res/obj_err_rewardv3_v2.csv', 'a', newline='') as file:
             mywriter = csv.writer(file, delimiter=',')
-            a = np.array(arr_stop_step_list[:, i])
-            mywriter.writerow(a)
+            mywriter.writerow(filename)
+            mywriter.writerow(obj_err_list)
+
+        with open('res/step_rewardv3_v2.csv', 'a', newline='') as file:
+            mywriter = csv.writer(file, delimiter=',')
+            mywriter.writerow(filename)
+            mywriter.writerow(stop_step_list)
+

@@ -1,1 +1,1 @@
-# ML_in_Wireless_Network
+# DRL based BCD for Sum Rate Maximization

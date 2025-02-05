@@ -29,32 +29,3 @@ def brutal_search(G,w,p_bar,sigma):
     # gamma_star = np.log(sinr_star)
     return sinr_star
 
-
-if __name__ == '__main__':
-    num = 5000
-    sigma = np.array([[0.05, 0.05, 0.05]]).T
-
-    with open('../_rl_sr/data1.csv', 'w', newline='') as file:
-        for i in range(num):
-            print("i:", i)
-            G_std = np.round(np.random.rand(3, 3) + np.diag(np.random.rand(3)) * 10,2)
-            print("G_std:",G_std)
-
-            G = G_std / 0.05
-            p_bar = np.round(np.random.rand(1,1)*3, 2)
-            print("p_bar:",p_bar)
-            if p_bar[0][0] <= 0.02:
-                continue
-            w = np.round(np.random.rand(3, 1), 2)
-
-            gamma_star = brutal_search(G_std, w, p_bar,sigma)
-
-            G_re = G_std.reshape((9,1))
-            rea1 = np.hstack((G_re.T, p_bar.T))
-            # print(rea1)
-
-            res = np.hstack((G_re.T,w.T,sigma.T,p_bar.T,gamma_star.T)) # 9+3+3
-            mywriter = csv.writer(file, delimiter=',')
-            mywriter.writerows(res)
-
-
